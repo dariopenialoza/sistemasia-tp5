@@ -5,7 +5,7 @@ import math
 
 def create_letter_plot(letter, ax):
     array = np.array(letter).reshape((7, 5))
-    cmap = plt.cm.get_cmap('Greens')
+    cmap = plt.get_cmap('Greens')
     cmap.set_under(color='white')
 
     ax.imshow(array, cmap=cmap, vmin=0, vmax=1)

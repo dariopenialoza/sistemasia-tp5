@@ -44,4 +44,204 @@ class Autoencoder:
         self.qty_nodes_in_hidden_layer = qty_nodes_in_hidden_layers
         self.latent_space_size = latent_space_size
         self.layers, self.latent_space_idx = self.__init_layers()  # Inicialización de las capas
+
+
+    # Inicializar conjuntos de training y testing
+    def __divide_data_by_percentage(self, input, p):
+        num_rows = int(p * input.shape[0])
+        idx = np.random.permutation(input.shape[0])
+        t1 = input[idx[:num_rows], :]
+        t2 = input[idx[num_rows:], :]
+        return t1, t1, t2, t2
+    
+    def __init_layers(self):
+        layers = []
+        current_encoder_layer = 0
+
+        # Inicializamos las capas asociadas al encoder. 
+        # EJ: 10 -> 5 
+        encoder_layer_0 = Layer(self.qty_nodes_in_hidden_layer[current_encoder_layer],
+                        self.input_data_len,
+                        self.hidden_activation, self.beta)
+        layers.append(encoder_layer_0)
+
+        current_encoder_layer += 1
+
+        # Inicializamos capas intermedia (si solo tenemos una nunca entramos acá)
+        # Cantidad de neuronas definido en config.json, numero de entradas dependiente de capa anterior
+        while current_encoder_layer < self.qty_hidden_layers:
+            layer = Layer(self.qty_nodes_in_hidden_layer[current_encoder_layer],
+                          self.qty_nodes_in_hidden_layer[current_encoder_layer-1],
+                          self.hidden_activation, self.beta)
+            layers.append(layer)
+            current_encoder_layer += 1  
+
+        latent_space_idx = current_encoder_layer
+
+        # Inicializamos capa conectada a capa latente 
+        latent_layer = Layer(self.latent_space_size,
+                             self.qty_nodes_in_hidden_layer[current_encoder_layer-1],
+                             self.output_activation, self.beta) 
+        layers.append(latent_layer)
+
+        # Inicializamos las capas asociadas al encoder. 
+        # EJ: 5 -> 10 ya que el espacio latente se comparte
+        inverted_hidden_nodes = self.qty_nodes_in_hidden_layer[::-1]
+        current_decoder_layer = 0
+
+        decoder_layer_0 = Layer(inverted_hidden_nodes[current_decoder_layer],
+                        self.latent_space_size,
+                        self.hidden_activation, self.beta)
+        layers.append(decoder_layer_0)
+        current_decoder_layer += 1
+
+        # Inicializamos capas intermedia (si solo tenemos una nunca entramos acá)
+        # Cantidad de neuronas definido en config.json, numero de entradas dependiente de capa anterior
+        while current_decoder_layer < self.qty_hidden_layers:
+            layer = Layer(inverted_hidden_nodes[current_decoder_layer],
+                          inverted_hidden_nodes[current_decoder_layer-1],
+                          self.hidden_activation, self.beta)
+            layers.append(layer)
+            current_decoder_layer += 1
+
+        # Inicializamos capa de salida
+        output_layer = Layer(self.input_data_len,
+                             inverted_hidden_nodes[current_decoder_layer-1],
+                             self.output_activation, self.beta) 
+        layers.append(output_layer)
+        
+        return layers, latent_space_idx
+    
+    def __calculate_min_and_max(self, expected_data):
+        return np.min(expected_data), np.max(expected_data)
+
+    def train(self):
+        current_epoch = 0
+        train_len = 0
+        input = expected = None
+
+        if self.training_percentage == 1:
+            train_len = len(self.input_data) 
+            input = self.input_data
+            expected = self.expected_data
+        else:
+            train_len = len(self.train_input_data)
+            input = self.train_input_data
+            expected = self.train_expected_data
+
+        mse_errors = []
+
+        finished = False
+        while current_epoch < self.epochs and not finished:
+            Os = []
+            if current_epoch%1000 == 0:
+                print(current_epoch) 
+
+            for i in range(train_len):
+                # Forward activation
+                activations = self.activate(input[i])
+                Os.append(activations[-1])
+
+                # Calculate error of output layer
+                self.layers[-1].calc_error_d(expected[i] - Os[i], Os[i])
+                
+                # Backward propagation
+                for i in range(len(self.layers) - 2, -1, -1):
+                    inherit_layer = self.layers[i + 1]
+                    self.layers[i].calc_error_d(np.dot(inherit_layer.weights,inherit_layer.error_d), activations[i + 1])
+
+                for i in range(len(self.layers)):
+                    self.layers[i].apply_delta(activations[i], self.learning_rate, current_epoch, self.optimization_method, self.alpha, self.beta1, self.beta2, self.epsilon)
+
+            mse_errors.append(self.mid_square_error(Os, expected))
+
+            if (mse_errors[current_epoch] < self.min_error):
+                finished = True
+
+            current_epoch += 1
+
+        # Guardo el MSE error al finalizar el entrenamiento
+        self.train_MSE = mse_errors[current_epoch - 1]
+
+        print(f"Finished Training. \n MSE: {self.train_MSE}")
+
+        return mse_errors, current_epoch
+    
+    def activate(self, init_input):
+        activations = [init_input]
+        for i in range(len(self.layers)):
+            activations.append(self.layers[i].activate(activations[-1]))
+        return activations
+        
+    def predict(self, init_input):
+        activations = self.activate(init_input)
+        return activations[-1]
+
+    def predict_latent_space(self, latent_space):
+        activations = [latent_space]
+        
+        i = self.latent_space_idx + 1
+
+        while i < len(self.layers):
+            activations.append(self.layers[i].activate(activations[-1]))
+            i = i + 1
+
+        return activations[-1]
+
+    def latent_space(self, init_input):
+        activations = self.activate(init_input)
+        return activations[self.latent_space_idx + 1]
+
+    def __str__(self) -> str:
+        str = "Autoencoder\n"
+        for i in range(len(self.layers)):
+            str += f"Capa {i}: {self.layers[i].get_weights().shape} \n {self.layers[i]}\n"
+        return str
+    
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def mid_square_error(self, Os, expected):
+        error = 0
+        size = len(Os)
+        for i in range(size):
+            error += (expected[i] - self.__denormalize_image(Os[i])) ** 2
+        return np.sum(error) / size
+        
+    # -----------------------NORMALIZATION-----------------------
+    def normalize_image(self, values, output_activation):
+        switcher = {
+            "TANH": self.__normalize_tanh_image(values),
+            "LOG": self.__normalize_log_image(values),
+        }
+
+        return switcher.get(output_activation, "Tipo de activacion de salida invalido")
+
+    # Normalizacion para [a,b] es: X'=((X-Xmin)/(Xmax-Xmin))(b-a)+a
+    def __normalize_tanh_image(self, values):
+        return (2 * (values - self.min) / (self.max - self.min)) - 1
+    def __normalize_log_image(self, values):
+        return (values - self.min) / (self.max - self.min)
+
+    def __denormalize_image(self, values):
+        switcher = {
+            "TANH": self.__denormalize_tanh_image(values),
+            "LOG": self.__denormalize_log_image(values),
+        }
+
+        return switcher.get(self.output_activation, "Tipo de activacion de salida invalido")
+
+    def __denormalize_tanh_image(self, values):
+        return ((values + 1) * (self.max - self.min) * 0.5) + self.min
+    def __denormalize_log_image(self, values):
+        return values * (self.max - self.min) + self.min
+
+    def plot(self, mse_errors, epochs):
+
+        plt.plot(range(epochs), mse_errors)
+        plt.xlabel('Generación')
+        plt.ylabel('Error (MSE)')
+        plt.title(f'Perceptron Multicapa \n η={self.learning_rate} \n')
+        
+        plt.show()
     
